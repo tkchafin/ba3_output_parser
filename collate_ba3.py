@@ -16,10 +16,7 @@ from statsmodels.tsa.stattools import acf
 def main():
     args = parse_args()
 
-    # Check if directories exist
-    if not os.path.exists(args.logdir):
-        print(f"Error: Log directory {args.logdir} does not exist!")
-        return
+    # Check if directory exists
     if not os.path.exists(args.outdir):
         print(f"Error: Output directory {args.outdir} does not exist!")
         return
@@ -29,25 +26,23 @@ def main():
 
     pdf_path = f"{args.out}_mcmc.pdf"
     with PdfPages(pdf_path) as pdf:
-        for filename in os.listdir(args.logdir):
-            filepath = os.path.join(args.logdir, filename)
-            run_name, table_df = parse_log_file(filepath)
+        for filename in os.listdir(args.outdir):
+            filepath = os.path.join(args.outdir, filename)
+            if "trace.txt" in filename:
+                run_name, table_df = parse_trace_file(filepath)
 
-            if run_name and not table_df.empty:
+                if run_name and not table_df.empty:
+                    # mean test for convergence from post burn-in samples 
+                    burn_idx = int(args.burn * len(table_df))
+                    post_burn_table_df = table_df[burn_idx:]
+                    mean_test(post_burn_table_df['LogProb'], args.x, args.alpha)
 
-                # mean test for convergence from post burn-in samples 
-                burn_idx = int(args.burn * len(table_df))
-                post_burn_table_df = table_df[burn_idx:]
-                mean_test(post_burn_table_df['logL'], args.x, args.alpha)
+                    fig = trace_and_autocorr_plot(run_name, table_df['LogProb'], burn_idx)
+                    pdf.savefig(fig)
+                    plt.close(fig)
 
-                check_autocorrelation_and_thinning(post_burn_table_df['logL'])
-
-                fig = trace_and_autocorr_plot(run_name, table_df['logL'], burn_idx)
-                pdf.savefig(fig)
-                plt.close(fig)
-
-                all_logL_data.append(post_burn_table_df['logL'])
-                all_run_names.append(run_name)
+                    all_logL_data.append(post_burn_table_df['LogProb'])
+                    all_run_names.append(run_name)
 
         # After all runs are processed, plot the grid of histograms
         num_runs = len(all_run_names)
@@ -60,7 +55,7 @@ def main():
             ax = axes[idx // cols, idx % cols] if rows > 1 else axes[idx]
             ax.hist(logL, bins=30, edgecolor="k", alpha=0.7)
             ax.set_title(run_name)
-            ax.set_xlabel('logL')
+            ax.set_xlabel('LogProb')
             ax.set_ylabel('Frequency')
         
         # If there are empty subplots, hide them
@@ -72,36 +67,13 @@ def main():
         pdf.savefig(fig)
         plt.close(fig)
 
-def parse_log_file(filepath):
-    with open(filepath, 'r') as f:
-        content = f.read().replace('\r', '\n')
-        lines = content.split('\n')
 
-    first_non_blank = next((line for line in lines if line.strip()), None)
-    if not first_non_blank or "BA3-SNPS" not in first_non_blank:
-        return None, None
+def parse_trace_file(filepath):
+    # Load tab-delimited trace file into a pandas dataframe
+    table_df = pd.read_csv(filepath, sep="\t", skipinitialspace=True)
 
-    run_name = None
-    table_data = {
-        'logP_M': [],
-        'logL_G': [],
-        'logL': []
-    }
-
-    for line in lines:
-        line = line.strip()
-        # Extract run name
-        if "Output file:" in line:
-            run_name = line.split("Output file:")[1].strip()
-
-        # Collect trace 
-        if line.startswith("logP(M):"):
-            parts = line.split()
-            table_data['logP_M'].append(float(parts[1]))
-            table_data['logL_G'].append(float(parts[3]))
-            table_data['logL'].append(float(parts[5]))
-
-    table_df = pd.DataFrame(table_data)
+    # Extract run name from the filename
+    run_name = os.path.basename(filepath).replace(".trace.txt", "")
 
     return run_name, table_df
 
@@ -145,7 +117,6 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Parse output files from BayesAss")
     
     # Arguments
-    parser.add_argument('--logdir', default="logs", help="Directory with log files")
     parser.add_argument('--outdir', default="output", help="Directory with output files")
     parser.add_argument('--out', default="ba3_combined", help="Desired prefix of collated output")
     parser.add_argument('--popmap', default=None, help="Optional tsv file mapping integer to string population labels")

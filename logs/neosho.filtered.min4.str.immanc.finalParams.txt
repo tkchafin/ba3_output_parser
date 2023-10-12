@@ -1,3 +1,0 @@
-##Tuning completed early after 6 rounds.
-##M	A	F
-0.1563	0.5500	0.0375
