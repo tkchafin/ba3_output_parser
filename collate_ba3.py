@@ -21,10 +21,10 @@ def main():
         print(f"Error: Output directory {args.outdir} does not exist!")
         return
 
-    all_logL_data = []
-    all_run_names = []
+    all_logL_data = {}  # Using dictionary {run_name: data}
 
     pdf_path = f"{args.out}_mcmc.pdf"
+    print("Evaluating trace files for each run...")
     with PdfPages(pdf_path) as pdf:
         for filename in os.listdir(args.outdir):
             filepath = os.path.join(args.outdir, filename)
@@ -41,23 +41,23 @@ def main():
                     pdf.savefig(fig)
                     plt.close(fig)
 
-                    all_logL_data.append(post_burn_table_df['LogProb'])
-                    all_run_names.append(run_name)
+                    all_logL_data[run_name] = post_burn_table_df['LogProb']
 
         # After all runs are processed, plot the grid of histograms
-        num_runs = len(all_run_names)
+        run_names = list(all_logL_data.keys())
+        num_runs = len(run_names)
         cols = max(int(np.sqrt(num_runs)), 1)
         rows = math.ceil(num_runs / cols)
         
         fig, axes = plt.subplots(rows, cols, figsize=(15, 5*rows))
 
-        for idx, (logL, run_name) in enumerate(zip(all_logL_data, all_run_names)):
+        for idx, run_name in enumerate(run_names):
             ax = axes[idx // cols, idx % cols] if rows > 1 else axes[idx]
-            ax.hist(logL, bins=30, edgecolor="k", alpha=0.7)
+            ax.hist(all_logL_data[run_name], bins=30, edgecolor="k", alpha=0.7)
             ax.set_title(run_name)
             ax.set_xlabel('LogProb')
             ax.set_ylabel('Frequency')
-        
+
         # If there are empty subplots, hide them
         for idx in range(num_runs, rows * cols):
             ax = axes[idx // cols, idx % cols] if rows > 1 else axes[idx]
@@ -66,11 +66,20 @@ def main():
         fig.tight_layout()
         pdf.savefig(fig)
         plt.close(fig)
+        print()
+
+    # compute gelman-rubin statistic for convergence across reps
+    print("Checking for convergence across runs...")
+    R_hat = compute_R_hat(list(all_logL_data.values()))
+    print("R-hat for LogProb:", R_hat)
 
     # parse popmap
     pop_mapping = {}
     if args.popmap:
         pop_mapping = parse_popmap(args.popmap)
+
+    mig_est_data = {}
+    mig_err_data = {}
 
     # parse migration matrices 
     for filename in os.listdir(args.outdir):
@@ -78,8 +87,6 @@ def main():
         if "trace.txt" not in filename:
             run_name = filename 
             mig_est, mig_err = parse_ba3_results(filepath)
-            print(mig_est)
-            print(mig_err)
 
             if args.popmap:
                 # Update the row and column names using the pop_mapping
@@ -88,9 +95,22 @@ def main():
                 mig_err.columns = [pop_mapping[i] for i in mig_err.columns]
                 mig_err.index = [pop_mapping[i] for i in mig_err.index]
 
-                print(mig_est)
-                print(mig_err)
+            mig_est_data[run_name] = mig_est
+            mig_err_data[run_name] = mig_err
 
+    # calculate deviance 
+    bayesian_deviances = {}
+    for run_name, log_prob_trace in all_logL_data.items():
+        bayesian_deviances[run_name] = calculate_bayesian_deviance(log_prob_trace)
+
+    # format as pd and print 
+    deviance_df = pd.DataFrame(list(bayesian_deviances.items()), columns=['Run Name', 'Bayesian Deviance'])
+    print("Bayesian Deviances:")
+    print(deviance_df)
+
+    best_run = deviance_df.sort_values(by='Bayesian Deviance', ascending=True).iloc[0]
+    print("The best run by Bayesian Deviance is:", best_run['Run Name'], "with a deviance of:", best_run['Bayesian Deviance'])
+    print()
 
     # formatted tables 
     # table for best (by bayesian deviance)
@@ -102,6 +122,10 @@ def main():
     # heatmap of rates 
 
     # graph of rates (with optional coordinates supplied)
+
+
+def calculate_bayesian_deviance(log_prob_trace):
+    return -2 * np.mean(log_prob_trace)
 
 
 def parse_ba3_results(filename):
@@ -188,6 +212,25 @@ def parse_popmap(filename):
         mapping[parts[0]] = parts[1]
 
     return mapping
+
+
+def compute_R_hat(log_probs):
+    M = len(log_probs)
+    N = len(log_probs[0])
+
+    # between-chain variance
+    chain_means = [np.mean(chain) for chain in log_probs]
+    global_mean = np.mean(chain_means)
+    B = N * np.var(chain_means, ddof=1)
+
+    # within-chain variance
+    W = np.mean([np.var(chain, ddof=1) for chain in log_probs])
+
+    # R-hat
+    var_theta = (1 - 1/N) * W + (1/N) * B
+    R_hat = np.sqrt(var_theta / W)
+
+    return R_hat
 
 
 def mean_test(series, x_prop, alpha):
