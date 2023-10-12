@@ -67,6 +67,85 @@ def main():
         pdf.savefig(fig)
         plt.close(fig)
 
+    # parse popmap
+    pop_mapping = {}
+    if args.popmap:
+        pop_mapping = parse_popmap(args.popmap)
+
+    # parse migration matrices 
+    for filename in os.listdir(args.outdir):
+        filepath = os.path.join(args.outdir, filename)
+        if "trace.txt" not in filename:
+            run_name = filename 
+            mig_est, mig_err = parse_ba3_results(filepath)
+            print(mig_est)
+            print(mig_err)
+
+            if args.popmap:
+                # Update the row and column names using the pop_mapping
+                mig_est.columns = [pop_mapping[i] for i in mig_est.columns]
+                mig_est.index = [pop_mapping[i] for i in mig_est.index]
+                mig_err.columns = [pop_mapping[i] for i in mig_err.columns]
+                mig_err.index = [pop_mapping[i] for i in mig_err.index]
+
+                print(mig_est)
+                print(mig_err)
+
+
+    # formatted tables 
+    # table for best (by bayesian deviance)
+    # table for average (across all reps)
+
+    # plot histogram of within-pop rates, with lines showing the prior 
+    # bounds (2/3 and 1.0)
+
+    # heatmap of rates 
+
+    # graph of rates (with optional coordinates supplied)
+
+
+def parse_ba3_results(filename):
+    with open(filename, 'r') as f:
+        lines = [line.strip() for line in f.readlines() if line.strip()]
+    
+    # extract pop name map
+    map_line_index = lines.index("Population Index -> Population Label:") + 1
+    map_line = lines[map_line_index]
+    mapping_pairs = map_line.split()
+    mapping = {int(pair.split("->")[0]): pair.split("->")[1] for pair in mapping_pairs}
+
+    # empty matrices to hold data
+    n = len(mapping)
+    mig_est_matrix = np.zeros((n, n))
+    mig_err_matrix = np.zeros((n, n))
+    
+    # parse mig matrix
+    mig_rates_index = lines.index('Migration Rates:')
+    for line in lines[mig_rates_index+1:]:
+        if not line.startswith("m"):
+            break
+        parts = line.split()
+        for i in range(0, len(parts), 2):
+            part_key = parts[i]
+            part_value = parts[i+1]
+
+            row, col = map(int, [part_key.split('[')[1].split(']')[0], part_key.split('[')[2].split(']')[0]])
+            value, stdev = part_value.split('(')
+            stdev = stdev.rstrip(')')
+            mig_est_matrix[row, col] = float(value)
+            mig_err_matrix[row, col] = float(stdev)
+                
+    # convert to pop names
+    df_mig_est = pd.DataFrame(mig_est_matrix)
+    df_mig_err = pd.DataFrame(mig_err_matrix)
+    df_mig_est.columns = [mapping[i] for i in df_mig_est.columns]
+    df_mig_est.index = [mapping[i] for i in df_mig_est.index]
+    df_mig_err.columns = [mapping[i] for i in df_mig_err.columns]
+    df_mig_err.index = [mapping[i] for i in df_mig_err.index]
+    
+    return df_mig_est, df_mig_err
+
+
 
 def parse_trace_file(filepath):
     # Load tab-delimited trace file into a pandas dataframe
@@ -96,6 +175,20 @@ def trace_and_autocorr_plot(run_name, logL_series, burn_in):
     
     fig.tight_layout()
     return fig
+
+
+def parse_popmap(filename):
+    """Parse the population map file and return the index-to-label mapping."""
+    with open(filename, 'r') as f:
+        lines = [line.strip() for line in f.readlines() if line.strip()]
+    
+    mapping = {}
+    for line in lines:
+        parts = line.split()
+        mapping[parts[0]] = parts[1]
+
+    return mapping
+
 
 def mean_test(series, x_prop, alpha):
     n = len(series)
