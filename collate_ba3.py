@@ -9,6 +9,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from scipy.stats import ttest_ind
+from scipy.stats import norm
 import numpy as np
 from statsmodels.tsa.stattools import acf
 
@@ -35,7 +36,7 @@ def main():
                     # mean test for convergence from post burn-in samples 
                     burn_idx = int(args.burn * len(table_df))
                     post_burn_table_df = table_df[burn_idx:]
-                    mean_test(post_burn_table_df['LogProb'], args.x, args.alpha)
+                    geweke_test(post_burn_table_df['LogProb'])
 
                     fig = trace_and_autocorr_plot(run_name, table_df['LogProb'], burn_idx)
                     pdf.savefig(fig)
@@ -233,6 +234,27 @@ def compute_R_hat(log_probs):
     return R_hat
 
 
+def geweke_test(series, first=0.1, last=0.5, alpha=0.05):
+    n = len(series)
+    
+    first_slice = series[:int(first * n)]
+    last_slice = series[-int(last * n):]
+
+    mean_first, var_first = first_slice.mean(), first_slice.var()
+    mean_last, var_last = last_slice.mean(), last_slice.var()
+
+    z = (mean_first - mean_last) / np.sqrt(var_first / len(first_slice) + var_last / len(last_slice))
+
+    p = 2 * (1 - norm.cdf(abs(z)))  # Two-tailed p-value
+
+    if p < alpha:
+        print(f"The means of the first {first*100:.0f}% and last {last*100:.0f}% are statistically different (Z-score: {z:.5f}, p-value: {p:.5f}).")
+    else:
+        print(f"The means of the first {first*100:.0f}% and last {last*100:.0f}% are not statistically different (Z-score: {z:.5f}, p-value: {p:.5f}).")
+
+    return p
+
+
 def mean_test(series, x_prop, alpha):
     n = len(series)
     x_percent = x_prop * 100
@@ -256,8 +278,6 @@ def parse_args():
     parser.add_argument('--outdir', default="output", help="Directory with output files")
     parser.add_argument('--out', default="ba3_combined", help="Desired prefix of collated output")
     parser.add_argument('--popmap', default=None, help="Optional tsv file mapping integer to string population labels")
-    parser.add_argument('--x', type=float, default=0.2, help="Proportion used for the mean test")
-    parser.add_argument('--alpha', type=float, default=0.05, help="Significance level for the t-test")
     parser.add_argument("--burn", type=float, default=0.5, help="Proportion of samples which were discarded as burn-in")
     return parser.parse_args()
 
