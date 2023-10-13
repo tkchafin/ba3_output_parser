@@ -167,21 +167,21 @@ def save_to_excel(mig_est_data, mig_err_data, best_run, output_name):
     combined_data = {}
     for run_name, est in mig_est_data.items():
         err = mig_err_data[run_name]
-        combined = est.applymap('{:.5f}'.format) + "(" + err.applymap('{:.5f}'.format) + ")"
+        combined = est.applymap('{:.5f}'.format) + " (" + err.applymap('{:.5f}'.format) + ")"
         combined_data[run_name] = combined
 
     # across-run average and standard deviation 
     all_dfs = list(mig_est_data.values())
     avg_df = pd.concat(all_dfs).groupby(level=0).mean()
     std_df = pd.concat(all_dfs).groupby(level=0).std()
-    avg_combined = avg_df.applymap('{:.5f}'.format) + "(" + std_df.applymap('{:.5f}'.format) + ")"
+    avg_combined = avg_df.applymap('{:.5f}'.format) + " (" + std_df.applymap('{:.5f}'.format) + ")"
 
     # write to excel
     with pd.ExcelWriter(output_name) as writer:
         for run_name, data in combined_data.items():
             data.to_excel(writer, sheet_name=run_name)
         avg_combined.to_excel(writer, sheet_name="Average_Across_Runs")
-        best_run_combined = mig_est_data[best_run].applymap('{:.5f}'.format) + "(" + mig_err_data[best_run].applymap('{:.5f}'.format) + ")"
+        best_run_combined = mig_est_data[best_run].applymap('{:.5f}'.format) + " (" + mig_err_data[best_run].applymap('{:.5f}'.format) + ")"
         best_run_combined.to_excel(writer, sheet_name="Best_Run")
     print(f"Excel file saved as {output_name}")
     return avg_df, std_df
