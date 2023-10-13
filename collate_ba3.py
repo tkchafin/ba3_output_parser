@@ -12,6 +12,10 @@ from scipy.stats import ttest_ind
 from scipy.stats import norm
 import numpy as np
 from statsmodels.tsa.stattools import acf
+import networkx as nx
+import matplotlib.gridspec as gridspec
+
+plt.rcParams['figure.max_open_warning'] = 40
 
 
 def main():
@@ -125,12 +129,158 @@ def main():
         save_to_tsv(mig_est_data, mig_err_data, best_run['Run Name'], args.out)
     print()
 
-    # plot histogram of within-pop rates, with lines showing the prior 
-    # bounds (2/3 and 1.0)
+    # get coords if they exist otherwise set to None
+    if args.coords:
+        coords = read_coords_to_dict(args.coords)
+    else:
+        coords = None
 
-    # heatmap of rates 
+    pdf_path = f"{args.out}_plots.pdf"
+    print("Generating plots...")
+    with PdfPages(pdf_path) as pdf:
+        # Stacked histogram of combined within-population migration rates from all runs
+        fig = plot_combined_within_pop_histogram(mig_est_data)
+        pdf.savefig(fig)
+        plt.close(fig)
 
-    # graph of rates (with optional coordinates supplied)
+        # rates plots 
+        data_dict = {**mig_est_data, 'Average': all_est, 'Best Run': mig_est_data[best_run["Run Name"]]}
+        for dataset_name, data in data_dict.items():
+            fig = plot_rates(data, 
+                             dataset_name, 
+                             node_size=500,
+                             font_size=6,
+                             threshold=0.02,
+                             pos=coords,
+                             scale_alpha=False)
+            pdf.savefig(fig)
+            plt.close(fig)
+
+        print("Saved plots to", pdf_path)
+        print()
+
+
+def plot_rates(data, dataset_name, max_line_weight=5, max_arrowsize=25, 
+               threshold=0.02, node_size=700, font_size=8, scale_alpha=True, pos=None):
+
+    # Create a 2x2 grid of subplots
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(20, 16))
+    
+    # Plot 1: Heatmap
+    sns.heatmap(data, ax=ax1, cmap="YlGnBu", annot=True, fmt=".2f")
+    ax1.set_title(f"Heatmap: {dataset_name}")
+
+    # Determine vmin and vmax for each dataset
+    non_diagonal_values = data.values[~np.eye(data.shape[0], dtype=bool)]
+    vmin = np.min(non_diagonal_values)
+    vmax = np.max(non_diagonal_values)
+
+    G = nx.DiGraph()  # Using a Directed Graph to represent arrows
+
+    for pop in data.columns:
+        G.add_node(pop)
+
+    # Using min-max scaled data for weights
+    def min_max_scale(df):
+        non_diagonal_values = df.values[~np.eye(df.shape[0], dtype=bool)]
+        min_val, max_val = np.min(non_diagonal_values), np.max(non_diagonal_values)
+        df_scaled = (df - min_val) / (max_val - min_val)
+        np.fill_diagonal(df_scaled.values, 0)  # setting diagonal values to 0
+        return df_scaled
+
+    scaled_data = min_max_scale(data)
+
+    for i, source in enumerate(data.columns):
+        for j, target in enumerate(data.columns[i+1:]):
+            weight_from = scaled_data.at[source, target]
+            weight_to = scaled_data.at[target, source]
+
+            if data.at[source, target] > threshold:
+                if scale_alpha:
+                    alpha_to = weight_to
+                    alpha_from = weight_from
+                else:
+                    alpha_to = alpha_from = 1
+
+                G.add_edge(source, target, alpha_from=alpha_from, alpha_to=alpha_to,
+                           weight_from=weight_from * max_line_weight, 
+                           weight_to=weight_to * max_line_weight,
+                           rate_from=data.at[source, target], rate_to=data.at[target, source])
+
+    # Helper function to draw the graph
+    def draw_graph(G, pos, ax, dataset_name, arrow_scaling, vmin, vmax, font_size, node_size):
+        if pos is None:
+            pos = nx.spring_layout(G)
+        for (source, target, data) in G.edges(data=True):
+            # Same code as before to draw the edges
+            if data['weight_from'] > threshold:
+                color_from = plt.cm.viridis((data['rate_from'] - vmin) / (vmax - vmin))
+                arrow_size_from = max(min(data['weight_from'] * arrow_scaling, max_arrowsize), 1)
+                nx.draw_networkx_edges(G, pos, ax=ax, edgelist=[(source, target)], alpha=data['alpha_from'],
+                                    width=data['weight_from'], edge_color=color_from, connectionstyle="arc3,rad=0.3", 
+                                    arrowstyle='-|>', arrowsize=arrow_size_from)
+            
+            if data['weight_to'] > threshold:
+                color_to = plt.cm.viridis((data['rate_to'] - vmin) / (vmax - vmin))
+                arrow_size_to = max(min(data['weight_to'] * arrow_scaling, max_arrowsize), 1)
+                nx.draw_networkx_edges(G, pos, ax=ax, edgelist=[(target, source)], alpha=data['alpha_to'],
+                                    width=data['weight_to'], edge_color=color_to, connectionstyle="arc3,rad=0.3", 
+                                    arrowstyle='<|-', arrowsize=arrow_size_to)
+        
+        nx.draw_networkx_labels(G, pos, ax=ax, font_size=font_size)
+        nx.draw_networkx_nodes(G, pos, ax=ax, node_color="white", edgecolors="black", node_size=node_size)
+        ax.set_title(f"Graph: {dataset_name}")
+        ax.axis("off")
+
+        sm = plt.cm.ScalarMappable(cmap=plt.cm.viridis, norm=plt.Normalize(vmin=vmin, vmax=vmax))
+        plt.colorbar(sm, ax=ax, orientation='vertical')
+
+    max_width = max_line_weight
+    arrow_scaling = max_arrowsize / max_width
+
+    # Plot 2: Graph with Auto Layout
+    draw_graph(G, None, ax2, dataset_name, arrow_scaling, vmin, vmax, font_size, node_size)
+
+    # Plot 3: Graph with Provided Coordinates (if available)
+    if pos:
+        draw_graph(G, pos, ax3, dataset_name, arrow_scaling, vmin, vmax, font_size, node_size)
+
+    # Plot 4: Net Emigration Bar Chart
+    net_emigration = data.sum(axis=1) - data.sum(axis=0)  # sum of outgoing rates - sum of incoming rates
+    colors = ["red" if val < 0 else "blue" for val in net_emigration]
+    ax4.bar(net_emigration.index, net_emigration, color=colors)
+    ax4.axhline(0, color="black", linestyle="--")
+    ax4.set_title("Net Emigration by Population")
+    ax4.set_ylabel("Net Emigration Rate")
+
+    fig.tight_layout()
+
+    return fig
+
+
+def plot_combined_within_pop_histogram(mig_est_data):
+    diagonals = []
+    for run_name, data in mig_est_data.items():
+        diagonals.extend([data[pop][pop] for pop in data.columns])
+    fig, ax = plt.subplots()
+    sns.histplot(diagonals, ax=ax, kde=False, bins=30)
+    ax.axvline(2/3, color='r', linestyle='--', label='Lower prior bound')
+    ax.axvline(1.0, color='b', linestyle='--', label='Upper prior bound')
+    ax.set_title('Combined Within-Population Migration Rates from All Runs')
+    ax.set_xlabel('Migration Rate')
+    ax.set_ylabel('Frequency')
+    ax.legend()
+    return fig
+
+
+def read_coords_to_dict(coords_path):
+    """
+    Read the coordinate table and convert it into a dictionary mapping each sample 
+    to a tuple containing its latitude and longitude.
+    """
+    df = pd.read_csv(coords_path, delim_whitespace=True)
+    coords_dict = {row['sample']: (row['long'], row['lat']) for _, row in df.iterrows()}
+    return coords_dict
 
 
 def save_to_tsv(mig_est_data, mig_err_data, best_run, prefix):
@@ -325,7 +475,6 @@ def mean_test(series, x_prop, alpha):
         print(f"The means of the first and last {x_percent}% are statistically different (p-value: {p_val:.5f}).")
     else:
         print(f"The means of the first and last {x_percent}% are not statistically different (p-value: {p_val:.5f}).")
-
     return p_val
 
 
@@ -337,6 +486,7 @@ def parse_args():
     parser.add_argument('--out', default="ba3_combined", help="Desired prefix of collated output")
     parser.add_argument('--popmap', default=None, help="Optional tsv file mapping integer to string population labels")
     parser.add_argument("--burn", type=float, default=0.5, help="Proportion of samples which were discarded as burn-in")
+    parser.add_argument("--coords", default=None, type=str, help="Optional tsv file with population coordinates")
     parser.add_argument("--tsv", action='store_true', help="Toggle on to write outputs formatted as tsv")
     return parser.parse_args()
 
