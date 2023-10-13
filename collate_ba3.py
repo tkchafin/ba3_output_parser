@@ -150,9 +150,10 @@ def main():
                              dataset_name, 
                              node_size=500,
                              font_size=6,
-                             threshold=0.02,
+                             threshold=args.threshold,
+                             max_line_weight=10,
                              pos=coords,
-                             scale_alpha=False)
+                             scale_alpha=True)
             pdf.savefig(fig)
             plt.close(fig)
 
@@ -488,6 +489,7 @@ def parse_args():
     parser.add_argument("--burn", type=float, default=0.5, help="Proportion of samples which were discarded as burn-in")
     parser.add_argument("--coords", default=None, type=str, help="Optional tsv file with population coordinates")
     parser.add_argument("--tsv", action='store_true', help="Toggle on to write outputs formatted as tsv")
+    parser.add_argument("--threshold", default=0.01, type=float, help="Threshold to show migration edges in graph plots")
     return parser.parse_args()
 
 if __name__ == "__main__":
