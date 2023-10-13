@@ -36,6 +36,7 @@ def main():
                     # mean test for convergence from post burn-in samples 
                     burn_idx = int(args.burn * len(table_df))
                     post_burn_table_df = table_df[burn_idx:]
+                    print(run_name, end=": ")
                     geweke_test(post_burn_table_df['LogProb'])
 
                     fig = trace_and_autocorr_plot(run_name, table_df['LogProb'], burn_idx)
@@ -67,6 +68,7 @@ def main():
         fig.tight_layout()
         pdf.savefig(fig)
         plt.close(fig)
+        print("Plotted traces to",pdf_path)
         print()
 
     # compute gelman-rubin statistic for convergence across reps
@@ -114,8 +116,14 @@ def main():
     print()
 
     # formatted tables 
+    print(best_run['Run Name'])
     # table for best (by bayesian deviance)
     # table for average (across all reps)
+    print("Writing combined output...")
+    all_est, all_err = save_to_excel(mig_est_data, mig_err_data, best_run['Run Name'], f"{args.out}_combined.xlsx")
+    if args.tsv:
+        save_to_tsv(mig_est_data, mig_err_data, best_run['Run Name'], args.out)
+    print()
 
     # plot histogram of within-pop rates, with lines showing the prior 
     # bounds (2/3 and 1.0)
@@ -123,6 +131,60 @@ def main():
     # heatmap of rates 
 
     # graph of rates (with optional coordinates supplied)
+
+
+def save_to_tsv(mig_est_data, mig_err_data, best_run, prefix):
+    out_dir = f"{prefix}_tsv_files"
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
+
+    # runs
+    for run_name, est in mig_est_data.items():
+        est_file_name = os.path.join(out_dir, f"{prefix}_{run_name}_est.tsv")
+        err_file_name = os.path.join(out_dir, f"{prefix}_{run_name}_err.tsv")
+        
+        est.to_csv(est_file_name, sep='\t', index=True, header=True)
+        mig_err_data[run_name].to_csv(err_file_name, sep='\t', index=True, header=True)
+
+    # average tables
+    all_dfs = list(mig_est_data.values())
+    avg_df = pd.concat(all_dfs).groupby(level=0).mean()
+    std_df = pd.concat(all_dfs).groupby(level=0).std()
+
+    avg_df.to_csv(os.path.join(out_dir, f"{prefix}_avg_est.tsv"), sep='\t', index=True, header=True)
+    std_df.to_csv(os.path.join(out_dir, f"{prefix}_avg_err.tsv"), sep='\t', index=True, header=True)
+
+    # best run
+    mig_est_data[best_run].to_csv(os.path.join(out_dir, f"{prefix}_best_est.tsv"), sep='\t', index=True, header=True)
+    mig_err_data[best_run].to_csv(os.path.join(out_dir, f"{prefix}_best_err.tsv"), sep='\t', index=True, header=True)
+
+    print(f"TSV files saved in directory: {out_dir}")
+    return avg_df, std_df
+
+
+def save_to_excel(mig_est_data, mig_err_data, best_run, output_name):
+    # For each run, combine the estimate and error 
+    combined_data = {}
+    for run_name, est in mig_est_data.items():
+        err = mig_err_data[run_name]
+        combined = est.applymap('{:.5f}'.format) + "(" + err.applymap('{:.5f}'.format) + ")"
+        combined_data[run_name] = combined
+
+    # across-run average and standard deviation 
+    all_dfs = list(mig_est_data.values())
+    avg_df = pd.concat(all_dfs).groupby(level=0).mean()
+    std_df = pd.concat(all_dfs).groupby(level=0).std()
+    avg_combined = avg_df.applymap('{:.5f}'.format) + "(" + std_df.applymap('{:.5f}'.format) + ")"
+
+    # write to excel
+    with pd.ExcelWriter(output_name) as writer:
+        for run_name, data in combined_data.items():
+            data.to_excel(writer, sheet_name=run_name)
+        avg_combined.to_excel(writer, sheet_name="Average_Across_Runs")
+        best_run_combined = mig_est_data[best_run].applymap('{:.5f}'.format) + "(" + mig_err_data[best_run].applymap('{:.5f}'.format) + ")"
+        best_run_combined.to_excel(writer, sheet_name="Best_Run")
+    print(f"Excel file saved as {output_name}")
+    return avg_df, std_df
 
 
 def calculate_bayesian_deviance(log_prob_trace):
@@ -173,12 +235,8 @@ def parse_ba3_results(filename):
 
 
 def parse_trace_file(filepath):
-    # Load tab-delimited trace file into a pandas dataframe
     table_df = pd.read_csv(filepath, sep="\t", skipinitialspace=True)
-
-    # Extract run name from the filename
     run_name = os.path.basename(filepath).replace(".trace.txt", "")
-
     return run_name, table_df
 
 
@@ -279,6 +337,7 @@ def parse_args():
     parser.add_argument('--out', default="ba3_combined", help="Desired prefix of collated output")
     parser.add_argument('--popmap', default=None, help="Optional tsv file mapping integer to string population labels")
     parser.add_argument("--burn", type=float, default=0.5, help="Proportion of samples which were discarded as burn-in")
+    parser.add_argument("--tsv", action='store_true', help="Toggle on to write outputs formatted as tsv")
     return parser.parse_args()
 
 if __name__ == "__main__":
