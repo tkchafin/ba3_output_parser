@@ -214,14 +214,14 @@ def plot_rates(data, dataset_name, max_line_weight=5, max_arrowsize=25,
             pos = nx.spring_layout(G)
         for (source, target, data) in G.edges(data=True):
             # Same code as before to draw the edges
-            if data['weight_from'] > threshold:
+            if data['rate_from'] > threshold:
                 color_from = plt.cm.viridis((data['rate_from'] - vmin) / (vmax - vmin))
                 arrow_size_from = max(min(data['weight_from'] * arrow_scaling, max_arrowsize), 1)
                 nx.draw_networkx_edges(G, pos, ax=ax, edgelist=[(source, target)], alpha=data['alpha_from'],
                                     width=data['weight_from'], edge_color=color_from, connectionstyle="arc3,rad=0.3", 
                                     arrowstyle='-|>', arrowsize=arrow_size_from)
             
-            if data['weight_to'] > threshold:
+            if data['rate_to'] > threshold:
                 color_to = plt.cm.viridis((data['rate_to'] - vmin) / (vmax - vmin))
                 arrow_size_to = max(min(data['weight_to'] * arrow_scaling, max_arrowsize), 1)
                 nx.draw_networkx_edges(G, pos, ax=ax, edgelist=[(target, source)], alpha=data['alpha_to'],
