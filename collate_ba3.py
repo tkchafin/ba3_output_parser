@@ -18,7 +18,6 @@ import matplotlib.gridspec as gridspec
 
 plt.rcParams['figure.max_open_warning'] = 40
 
-
 def main():
     args = parse_args()
 
@@ -31,6 +30,7 @@ def main():
 
     pdf_path = f"{args.out}_mcmc.pdf"
     print("Evaluating trace files for each run...")
+    statistics_list = []  
     with PdfPages(pdf_path) as pdf:
         for filename in os.listdir(args.outdir):
             filepath = os.path.join(args.outdir, filename)
@@ -42,19 +42,34 @@ def main():
                     burn_idx = int(args.burn * len(table_df))
                     post_burn_table_df = table_df[burn_idx:]
                     print(run_name, end=": ")
-                    geweke_test(post_burn_table_df['LogProb'])
+                    g_z, g_p = geweke_test(post_burn_table_df['LogProb'])
 
                     # report effective sample size 
                     ess = pm.ess(post_burn_table_df['LogProb'].values)
-                    print(f"{run_name}: Effective sample size = {ess}")
+                    #print(f"{run_name}: Effective sample size = {ess}")
 
                     # make plots 
                     fig = trace_and_autocorr_plot(run_name, table_df['LogProb'], burn_idx)
                     pdf.savefig(fig)
                     plt.close(fig)
-                    print()
 
                     all_logL_data[run_name] = post_burn_table_df['LogProb']
+                    
+                    # calculate deviance 
+                    deviance = calculate_bayesian_deviance(post_burn_table_df['LogProb'])
+                    
+                    # Store statistics in a dictionary and append to the list
+                    stats_dict = {
+                        'Run': run_name,
+                        'ESS': ess,
+                        'Geweke_z': g_z,
+                        'Geweke_p': g_p,
+                        'Deviance': deviance
+                    }
+                    statistics_list.append(stats_dict)
+
+        # Convert list of dictionaries to DataFrame
+        statistics_df = pd.DataFrame(statistics_list)
 
         # After all runs are processed, plot the grid of histograms
         run_names = list(all_logL_data.keys())
@@ -82,10 +97,23 @@ def main():
         print("Plotted traces to",pdf_path)
         print()
 
-    # compute gelman-rubin statistic for convergence across reps
+    # log stats
+    log_file_path = f"{args.out}_stats.tsv"
+    print("Summary of runs:")
+    print(statistics_df)
+    statistics_df.to_csv(log_file_path, sep="\t", index=True, header=True)
+    print(f"Statistics written to {log_file_path}")
+    print()
+
+    # check convergence across runs 
     print("Checking for convergence across runs...")
     R_hat = compute_R_hat(list(all_logL_data.values()))
     print("R-hat for LogProb:", R_hat)
+
+    # get best run by deviance 
+    best_run = statistics_df.sort_values(by='Deviance', ascending=True).iloc[0]
+    print("The best run by Bayesian Deviance is:", best_run['Run'], "with a deviance of:", best_run['Deviance'])
+    print()
 
     # parse popmap
     pop_mapping = {}
@@ -112,28 +140,14 @@ def main():
             mig_est_data[run_name] = mig_est
             mig_err_data[run_name] = mig_err
 
-    # calculate deviance 
-    bayesian_deviances = {}
-    for run_name, log_prob_trace in all_logL_data.items():
-        bayesian_deviances[run_name] = calculate_bayesian_deviance(log_prob_trace)
-
-    # format as pd and print 
-    deviance_df = pd.DataFrame(list(bayesian_deviances.items()), columns=['Run Name', 'Bayesian Deviance'])
-    print("Bayesian Deviances:")
-    print(deviance_df)
-
-    best_run = deviance_df.sort_values(by='Bayesian Deviance', ascending=True).iloc[0]
-    print("The best run by Bayesian Deviance is:", best_run['Run Name'], "with a deviance of:", best_run['Bayesian Deviance'])
-    print()
-
+    
     # formatted tables 
-    print(best_run['Run Name'])
     # table for best (by bayesian deviance)
     # table for average (across all reps)
     print("Writing combined output...")
-    all_est, all_err = save_to_excel(mig_est_data, mig_err_data, best_run['Run Name'], f"{args.out}_combined.xlsx")
+    all_est, all_err = save_to_excel(mig_est_data, mig_err_data, best_run['Run'], f"{args.out}_combined.xlsx")
     if args.tsv:
-        save_to_tsv(mig_est_data, mig_err_data, best_run['Run Name'], args.out)
+        save_to_tsv(mig_est_data, mig_err_data, best_run['Run'], args.out)
     print()
 
     # get coords if they exist otherwise set to None
@@ -151,7 +165,7 @@ def main():
         plt.close(fig)
 
         # rates plots 
-        data_dict = {**mig_est_data, 'Average': all_est, 'Best Run': mig_est_data[best_run["Run Name"]]}
+        data_dict = {**mig_est_data, 'Average': all_est, 'Best Run': mig_est_data[best_run["Run"]]}
         for dataset_name, data in data_dict.items():
             fig = plot_rates(data, 
                              dataset_name, 
@@ -465,9 +479,10 @@ def geweke_test(series, first=0.1, last=0.5, alpha=0.05):
     if p < alpha:
         print(f"The means of the first {first*100:.0f}% and last {last*100:.0f}% are statistically different (Z-score: {z:.5f}, p-value: {p:.5f}).")
     else:
-        print(f"The means of the first {first*100:.0f}% and last {last*100:.0f}% are not statistically different (Z-score: {z:.5f}, p-value: {p:.5f}).")
+        pass
+        #print(f"The means of the first {first*100:.0f}% and last {last*100:.0f}% are not statistically different (Z-score: {z:.5f}, p-value: {p:.5f}).")
 
-    return p
+    return z,p
 
 
 def mean_test(series, x_prop, alpha):
