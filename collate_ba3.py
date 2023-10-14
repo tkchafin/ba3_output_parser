@@ -4,6 +4,7 @@ import os
 import argparse
 
 import math
+import pymc3 as pm
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -37,15 +38,21 @@ def main():
                 run_name, table_df = parse_trace_file(filepath)
 
                 if run_name and not table_df.empty:
-                    # mean test for convergence from post burn-in samples 
+                    # test for convergence 
                     burn_idx = int(args.burn * len(table_df))
                     post_burn_table_df = table_df[burn_idx:]
                     print(run_name, end=": ")
                     geweke_test(post_burn_table_df['LogProb'])
 
+                    # report effective sample size 
+                    ess = pm.ess(post_burn_table_df['LogProb'].values)
+                    print(f"{run_name}: Effective sample size = {ess}")
+
+                    # make plots 
                     fig = trace_and_autocorr_plot(run_name, table_df['LogProb'], burn_idx)
                     pdf.savefig(fig)
                     plt.close(fig)
+                    print()
 
                     all_logL_data[run_name] = post_burn_table_df['LogProb']
 
@@ -196,17 +203,16 @@ def plot_rates(data, dataset_name, max_line_weight=5, max_arrowsize=25,
             weight_from = scaled_data.at[source, target]
             weight_to = scaled_data.at[target, source]
 
-            if data.at[source, target] > threshold:
-                if scale_alpha:
-                    alpha_to = weight_to
-                    alpha_from = weight_from
-                else:
-                    alpha_to = alpha_from = 1
+            if scale_alpha:
+                alpha_to = weight_to
+                alpha_from = weight_from
+            else:
+                alpha_to = alpha_from = 1
 
-                G.add_edge(source, target, alpha_from=alpha_from, alpha_to=alpha_to,
-                           weight_from=weight_from * max_line_weight, 
-                           weight_to=weight_to * max_line_weight,
-                           rate_from=data.at[source, target], rate_to=data.at[target, source])
+            G.add_edge(source, target, alpha_from=alpha_from, alpha_to=alpha_to,
+                        weight_from=weight_from * max_line_weight, 
+                        weight_to=weight_to * max_line_weight,
+                        rate_from=data.at[source, target], rate_to=data.at[target, source])
 
     # Helper function to draw the graph
     def draw_graph(G, pos, ax, dataset_name, arrow_scaling, vmin, vmax, font_size, node_size):
